@@ -1,0 +1,14 @@
+{
+  "project": "pragmatic-file-declutter",
+  "language": "python",
+  "framework": "nicegui",
+  "test_runner": "pytest",
+  "linter": "ruff",
+  "type_checker": "mypy",
+  "conventions": {
+    "commits": "conventional-commits",
+    "versioning": "semver",
+    "docstrings": "google",
+    "line_length": 120
+  }
+}

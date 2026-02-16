@@ -1,0 +1,135 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pragmatic-file-declutter"
+version = "0.0.0"
+description = "Pragmatic desktop tool for photo & file decluttering with AI"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "fabiomobil" },
+]
+keywords = ["photo", "organizer", "declutter", "ai", "dedup", "classification"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Other Environment",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics",
+]
+
+dependencies = [
+    "nicegui>=2.0,<3.0",
+    "pywebview>=5.0,<6.0",
+    "Pillow>=10.0,<12.0",
+    "pillow-heif>=0.18,<1.0",
+    "rawpy>=0.21,<1.0",
+    "imagehash>=4.3,<5.0",
+    "open-clip-torch>=2.24,<3.0",
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "hdbscan>=0.8,<1.0",
+    "scikit-learn>=1.3,<2.0",
+    "google-generativeai>=0.8",
+    "openai>=1.0,<2.0",
+    "tufup>=1.0,<2.0",
+    "exifread>=3.0,<4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9.0",
+    "pytest-cov>=5.0,<6.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.8,<1.0",
+    "mypy>=1.8,<2.0",
+    "commitizen>=3.0,<4.0",
+    "pre-commit>=3.0,<4.0",
+]
+build = [
+    "nuitka>=2.0,<3.0",
+    "ordered-set>=4.0",
+]
+
+[project.scripts]
+pragmatic-declutter = "pragmatic_file_declutter:main"
+
+[project.urls]
+Homepage = "https://github.com/fabiomobil/pragmatic-file-declutter"
+Repository = "https://github.com/fabiomobil/pragmatic-file-declutter"
+Issues = "https://github.com/fabiomobil/pragmatic-file-declutter/issues"
+
+# === Tool Configurations ===
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pragmatic_file_declutter"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = [
+    "--strict-markers",
+    "--cov=pragmatic_file_declutter",
+    "--cov-report=term-missing",
+    "--cov-report=html:htmlcov",
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "nicegui.*",
+    "webview.*",
+    "imagehash.*",
+    "open_clip.*",
+    "hdbscan.*",
+    "rawpy.*",
+    "pillow_heif.*",
+    "exifread.*",
+    "tufup.*",
+    "google.generativeai.*",
+]
+ignore_missing_imports = true
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.0.0"
+version_files = [
+    "pyproject.toml:version",
+    "src/pragmatic_file_declutter/__init__.py:__version__",
+]
+tag_format = "v$version"
+update_changelog_on_bump = true
+changelog_file = "CHANGELOG.md"
