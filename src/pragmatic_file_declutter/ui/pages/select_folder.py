@@ -63,26 +63,45 @@ class SelectFolderPage:
             self._results_container.set_visibility(False)
 
     async def _on_browse(self) -> None:
-        """Handle browse button click."""
-        # Use native folder picker
-        result = await ui.run_javascript(
-            """
-            (async () => {
-                try {
-                    const handle = await window.showDirectoryPicker();
-                    return handle.name;
-                } catch (e) {
-                    return null;
-                }
-            })()
-            """,
-            timeout=60.0,
+        """Handle browse button click using native Windows folder picker."""
+        import tkinter as tk
+        from tkinter import filedialog
+
+        # Create hidden tkinter root window
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)  # Bring dialog to front
+
+        # Open native folder picker
+        folder_path = filedialog.askdirectory(
+            title="Select folder to scan",
+            mustexist=True,
         )
 
-        if result:
-            # For now, we'll use a text input since showDirectoryPicker
-            # doesn't give us the full path for security reasons
-            await self._show_path_dialog()
+        root.destroy()
+
+        if folder_path:
+            path = Path(folder_path).resolve()
+
+            # SECURITY: Reject network paths (UNC)
+            if str(path).startswith("\\\\"):
+                ui.notify("Network paths are not supported for security reasons", type="warning")
+                return
+
+            # SECURITY: Warn about system directories
+            system_dirs = ["Windows", "Program Files", "Program Files (x86)", "System32"]
+            if any(sd.lower() in str(path).lower() for sd in system_dirs):
+                ui.notify("System directories cannot be scanned", type="warning")
+                return
+
+            if path.exists() and path.is_dir():
+                self._selected_path = path
+                if self._path_label:
+                    self._path_label.text = escape(str(path))
+                if self._scan_button:
+                    self._scan_button.enable()
+            else:
+                ui.notify("Invalid folder path", type="negative")
 
     async def _show_path_dialog(self) -> None:
         """Show a dialog to enter the folder path."""
