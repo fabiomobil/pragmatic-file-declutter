@@ -38,7 +38,7 @@ dependencies = [
     "scikit-learn>=1.3,<2.0",
     "google-generativeai>=0.8",
     "openai>=1.0,<2.0",
-    "tufup>=1.0,<2.0",
+    "tufup>=0.9,<1.0",
     "exifread>=3.0,<4.0",
 ]
 

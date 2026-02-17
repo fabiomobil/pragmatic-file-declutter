@@ -5,7 +5,6 @@ __version__ = "0.0.0"
 
 def main() -> None:
     """Entry point for the application."""
-    from nicegui import ui
+    from pragmatic_file_declutter.ui.app import run
 
-    ui.label("Pragmatic File Declutter — Coming soon!")
-    ui.run(native=True, title="Pragmatic File Declutter", window_size=(1280, 800))
+    run(native=True, reload=False)
