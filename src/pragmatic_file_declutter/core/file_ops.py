@@ -34,6 +34,10 @@ class UndoError(FileOperationError):
     """Raised when undo operation fails."""
 
 
+class SecurityError(FileOperationError):
+    """Raised when a security violation is detected (path escape, symlink attack)."""
+
+
 @dataclass(frozen=True)
 class MoveRecord:
     """Immutable record of a file move operation.
@@ -155,7 +159,7 @@ class UndoStack:
         self._save()
 
 
-def safe_move(src: Path, dst: Path, undo_stack: UndoStack) -> None:
+def safe_move(src: Path, dst: Path, undo_stack: UndoStack, *, root: Path | None = None) -> None:
     """Safely move a file from src to dst with undo capability.
 
     This is the ONLY allowed way to move files in the application.
@@ -165,20 +169,31 @@ def safe_move(src: Path, dst: Path, undo_stack: UndoStack) -> None:
         src: Source file path (must exist).
         dst: Destination file path (must NOT exist).
         undo_stack: Stack to record the operation for undo.
+        root: Optional root directory. If provided, both src and dst must be within root.
 
     Raises:
         SourceNotFoundError: If source file does not exist.
         DestinationExistsError: If destination file already exists.
+        SecurityError: If paths escape the root directory or symlink attack detected.
         FileOperationError: If the move operation fails.
     """
     src = src.resolve()
     dst = dst.resolve()
 
+    # SECURITY: Validate paths are within root directory
+    if root is not None:
+        root_resolved = root.resolve()
+        if not src.is_relative_to(root_resolved):
+            raise SecurityError(f"Source path escapes root directory: {src}")
+        if not dst.is_relative_to(root_resolved):
+            raise SecurityError(f"Destination path escapes root directory: {dst}")
+
     if not src.exists():
         raise SourceNotFoundError(f"Source file not found: {src}")
 
-    if dst.exists():
-        raise DestinationExistsError(f"Destination already exists: {dst}")
+    # SECURITY: Check for symlink attacks on destination
+    if dst.exists() or dst.is_symlink():
+        raise DestinationExistsError(f"Destination already exists or is a symlink: {dst}")
 
     dst.parent.mkdir(parents=True, exist_ok=True)
 

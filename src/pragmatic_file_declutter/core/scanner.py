@@ -152,20 +152,24 @@ class ScanResult:
 def _iter_files(root: Path, recursive: bool = True) -> Iterator[Path]:
     """Iterate over all files in a directory.
 
+    SECURITY: Skips symlinks to prevent path escape attacks.
+
     Args:
         root: Root directory to scan.
         recursive: If True, scan subdirectories recursively.
 
     Yields:
-        Path objects for each file found.
+        Path objects for each file found (excluding symlinks).
     """
     if recursive:
         for item in root.rglob("*"):
-            if item.is_file():
+            # SECURITY: Skip symlinks to prevent path escape
+            if item.is_file() and not item.is_symlink():
                 yield item
     else:
         for item in root.iterdir():
-            if item.is_file():
+            # SECURITY: Skip symlinks to prevent path escape
+            if item.is_file() and not item.is_symlink():
                 yield item
 
 
@@ -250,6 +254,12 @@ def scan_directory(
     declutter_folder = "_pragmatic_declutter"
 
     for file_path in _iter_files(root, recursive=recursive):
+        # SECURITY: Ensure file is within root (prevents junction/mount point escape)
+        resolved_file = file_path.resolve()
+        if not resolved_file.is_relative_to(root):
+            logger.warning(f"Skipping file outside root directory: {file_path}")
+            continue
+
         # Skip hidden files
         if skip_hidden and any(part.startswith(".") for part in file_path.parts):
             continue

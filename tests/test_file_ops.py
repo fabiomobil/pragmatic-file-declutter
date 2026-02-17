@@ -10,6 +10,7 @@ import pytest
 from pragmatic_file_declutter.core.file_ops import (
     DestinationExistsError,
     MoveRecord,
+    SecurityError,
     SourceNotFoundError,
     UndoError,
     UndoStack,
@@ -206,6 +207,59 @@ class TestSafeMove:
         # Source should still exist
         assert src.exists()
         assert len(stack) == 0
+
+    def test_security_source_escapes_root(self, tmp_path: Path) -> None:
+        """safe_move should raise SecurityError if source escapes root."""
+        root = tmp_path / "safe_root"
+        root.mkdir()
+
+        outside = tmp_path / "outside.txt"
+        outside.write_text("sensitive", encoding="utf-8")
+
+        dst = root / "dest.txt"
+        history_file = tmp_path / "history.json"
+        stack = UndoStack(history_file)
+
+        with pytest.raises(SecurityError, match="escapes root"):
+            safe_move(outside, dst, stack, root=root)
+
+        assert len(stack) == 0
+
+    def test_security_dest_escapes_root(self, tmp_path: Path) -> None:
+        """safe_move should raise SecurityError if dest escapes root."""
+        root = tmp_path / "safe_root"
+        root.mkdir()
+
+        src = root / "source.txt"
+        src.write_text("data", encoding="utf-8")
+
+        outside_dst = tmp_path / "outside_dest.txt"
+        history_file = tmp_path / "history.json"
+        stack = UndoStack(history_file)
+
+        with pytest.raises(SecurityError, match="escapes root"):
+            safe_move(src, outside_dst, stack, root=root)
+
+        assert len(stack) == 0
+        assert src.exists()
+
+    def test_security_valid_root_move(self, tmp_path: Path) -> None:
+        """safe_move should succeed when both paths are within root."""
+        root = tmp_path / "safe_root"
+        root.mkdir()
+
+        src = root / "source.txt"
+        dst = root / "subdir" / "dest.txt"
+        src.write_text("data", encoding="utf-8")
+
+        history_file = tmp_path / "history.json"
+        stack = UndoStack(history_file)
+
+        safe_move(src, dst, stack, root=root)
+
+        assert not src.exists()
+        assert dst.exists()
+        assert len(stack) == 1
 
 
 class TestUndoLast:

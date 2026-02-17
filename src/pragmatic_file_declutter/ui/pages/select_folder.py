@@ -6,6 +6,7 @@ Allows user to select a folder and see scan results before processing.
 from __future__ import annotations
 
 import asyncio
+from html import escape
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -94,19 +95,33 @@ class SelectFolderPage:
 
                 async def on_confirm() -> None:
                     path_str = path_input.value
-                    if path_str:
-                        path = Path(path_str)
-                        if path.exists() and path.is_dir():
-                            self._selected_path = path
-                            if self._path_label:
-                                self._path_label.text = str(path)
-                            if self._scan_button:
-                                self._scan_button.enable()
-                            dialog.close()
-                        else:
-                            ui.notify("Invalid folder path", type="negative")
-                    else:
+                    if not path_str:
                         ui.notify("Please enter a path", type="warning")
+                        return
+
+                    path = Path(path_str).resolve()
+
+                    # SECURITY: Reject network paths (UNC)
+                    if str(path).startswith("\\\\"):
+                        ui.notify("Network paths are not supported for security reasons", type="warning")
+                        return
+
+                    # SECURITY: Warn about system directories
+                    system_dirs = ["Windows", "Program Files", "Program Files (x86)", "System32"]
+                    if any(sd.lower() in str(path).lower() for sd in system_dirs):
+                        ui.notify("System directories cannot be scanned", type="warning")
+                        return
+
+                    if path.exists() and path.is_dir():
+                        self._selected_path = path
+                        if self._path_label:
+                            # SECURITY: Escape path before display
+                            self._path_label.text = escape(str(path))
+                        if self._scan_button:
+                            self._scan_button.enable()
+                        dialog.close()
+                    else:
+                        ui.notify("Invalid folder path", type="negative")
 
                 ui.button("OK", on_click=on_confirm).props("color=primary")
 
@@ -139,7 +154,8 @@ class SelectFolderPage:
             self._show_results()
 
         except Exception as e:
-            ui.notify(f"Scan failed: {e}", type="negative")
+            # SECURITY: Escape error message to prevent XSS
+            ui.notify(f"Scan failed: {escape(str(e))}", type="negative")
 
         finally:
             self._scanning = False
