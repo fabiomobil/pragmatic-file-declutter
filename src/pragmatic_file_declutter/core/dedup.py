@@ -27,8 +27,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Thresholds for duplicate detection (Hamming distance)
-THRESHOLD_IDENTICAL = 5  # 0-5: identical
-THRESHOLD_SIMILAR = 10   # 6-10: similar
+THRESHOLD_IDENTICAL = 5   # 0-5: identical
+THRESHOLD_SIMILAR = 15    # 6-15: similar
 
 
 @dataclass(frozen=True)
@@ -268,13 +268,42 @@ def compute_hashes(
     return hashes, failed
 
 
+class UnionFind:
+    """Union-Find data structure for grouping similar images transitively."""
+
+    def __init__(self) -> None:
+        """Initialize empty Union-Find."""
+        self._parent: dict[Path, Path] = {}
+        self._rank: dict[Path, int] = {}
+
+    def find(self, x: Path) -> Path:
+        """Find root of x with path compression."""
+        if x not in self._parent:
+            self._parent[x] = x
+            self._rank[x] = 0
+        if self._parent[x] != x:
+            self._parent[x] = self.find(self._parent[x])
+        return self._parent[x]
+
+    def union(self, x: Path, y: Path) -> None:
+        """Union two sets by rank."""
+        rx, ry = self.find(x), self.find(y)
+        if rx == ry:
+            return
+        if self._rank[rx] < self._rank[ry]:
+            rx, ry = ry, rx
+        self._parent[ry] = rx
+        if self._rank[rx] == self._rank[ry]:
+            self._rank[rx] += 1
+
+
 def find_duplicates(
     hashes: list[ImageHash],
     *,
     identical_threshold: int = THRESHOLD_IDENTICAL,
     similar_threshold: int = THRESHOLD_SIMILAR,
 ) -> tuple[list[DuplicateGroup], list[DuplicateGroup]]:
-    """Find duplicate images using BK-tree for efficient search.
+    """Find duplicate images using BK-tree and Union-Find for transitive grouping.
 
     Args:
         hashes: List of ImageHash objects to compare.
@@ -287,64 +316,118 @@ def find_duplicates(
     if len(hashes) < 2:
         return [], []
 
-    # Build BK-tree
+    # Build BK-tree and hash lookup
     tree = BKTree()
+    hash_by_path: dict[Path, ImageHash] = {}
     for h in hashes:
         tree.add(h)
+        hash_by_path[h.path] = h
 
-    # Track which images have been assigned to a group
-    assigned: set[Path] = set()
+    # Use Union-Find to group transitively
+    uf_identical = UnionFind()
+    uf_similar = UnionFind()
+
+    # Track distances for each pair
+    distances: dict[tuple[Path, Path], int] = {}
+
+    # Find all pairs and union them
+    for img_hash in hashes:
+        matches = tree.find_within(img_hash, similar_threshold)
+
+        for other, dist in matches:
+            if other.path == img_hash.path:
+                continue
+
+            # Store distance (use sorted tuple for consistency)
+            pair = tuple(sorted([img_hash.path, other.path], key=str))
+            distances[pair] = dist  # type: ignore[index]
+
+            if dist <= identical_threshold:
+                uf_identical.union(img_hash.path, other.path)
+            elif dist <= similar_threshold:
+                uf_similar.union(img_hash.path, other.path)
+
+    # Build groups from Union-Find
     identical_groups: list[DuplicateGroup] = []
     similar_groups: list[DuplicateGroup] = []
 
-    for img_hash in hashes:
-        if img_hash.path in assigned:
+    # Collect identical groups
+    identical_roots: dict[Path, list[ImageHash]] = {}
+    for h in hashes:
+        root = uf_identical.find(h.path)
+        if root != h.path or any(uf_identical.find(other.path) == root for other in hashes if other.path != h.path):
+            if root not in identical_roots:
+                identical_roots[root] = []
+            identical_roots[root].append(h)
+
+    for root, members in identical_roots.items():
+        if len(members) < 2:
             continue
 
-        # Find all similar images
-        matches = tree.find_within(img_hash, similar_threshold)
+        # Sort by file size (largest first = original)
+        members.sort(key=lambda h: h.path.stat().st_size if h.path.exists() else 0, reverse=True)
 
-        # Filter out self and already-assigned
-        matches = [
-            (h, d) for h, d in matches
-            if h.path != img_hash.path and h.path not in assigned
-        ]
+        # Calculate average distance
+        total_dist = 0
+        count = 0
+        for i, m1 in enumerate(members):
+            for m2 in members[i + 1:]:
+                pair = tuple(sorted([m1.path, m2.path], key=str))
+                if pair in distances:
+                    total_dist += distances[pair]  # type: ignore[index]
+                    count += 1
 
-        if not matches:
+        avg_dist = total_dist / count if count > 0 else 0
+
+        group = DuplicateGroup(
+            original=members[0],
+            duplicates=members[1:],
+            similarity="identical",
+            avg_distance=avg_dist,
+        )
+        identical_groups.append(group)
+
+    # Collect similar groups (exclude those already in identical)
+    assigned_to_identical = {h.path for g in identical_groups for h in g.all_images}
+
+    similar_roots: dict[Path, list[ImageHash]] = {}
+    for h in hashes:
+        if h.path in assigned_to_identical:
+            continue
+        root = uf_similar.find(h.path)
+        if root != h.path or any(
+            uf_similar.find(other.path) == root
+            for other in hashes
+            if other.path != h.path and other.path not in assigned_to_identical
+        ):
+            if root not in similar_roots:
+                similar_roots[root] = []
+            similar_roots[root].append(h)
+
+    for root, members in similar_roots.items():
+        if len(members) < 2:
             continue
 
-        # Separate into identical and similar
-        identical = [(h, d) for h, d in matches if d <= identical_threshold]
-        similar = [(h, d) for h, d in matches if identical_threshold < d <= similar_threshold]
+        members.sort(key=lambda h: h.path.stat().st_size if h.path.exists() else 0, reverse=True)
 
-        # Create identical group if any
-        if identical:
-            group = DuplicateGroup(
-                original=img_hash,
-                duplicates=[h for h, _ in identical],
-                similarity="identical",
-                avg_distance=sum(d for _, d in identical) / len(identical),
-            )
-            identical_groups.append(group)
+        total_dist = 0
+        count = 0
+        for i, m1 in enumerate(members):
+            for m2 in members[i + 1:]:
+                pair = tuple(sorted([m1.path, m2.path], key=str))
+                if pair in distances:
+                    total_dist += distances[pair]  # type: ignore[index]
+                    count += 1
 
-            # Mark all as assigned
-            assigned.add(img_hash.path)
-            for h, _ in identical:
-                assigned.add(h.path)
+        avg_dist = total_dist / count if count > 0 else 0
 
-        # Create similar group (only if not already in identical)
-        elif similar:
-            group = DuplicateGroup(
-                original=img_hash,
-                duplicates=[h for h, _ in similar],
-                similarity="similar",
-                avg_distance=sum(d for _, d in similar) / len(similar),
-            )
-            similar_groups.append(group)
-
-            assigned.add(img_hash.path)
-            for h, _ in similar:
-                assigned.add(h.path)
+        group = DuplicateGroup(
+            original=members[0],
+            duplicates=members[1:],
+            similarity="similar",
+            avg_distance=avg_dist,
+        )
+        similar_groups.append(group)
 
     return identical_groups, similar_groups
 
