@@ -331,6 +331,9 @@ class SelectFolderPage:
         """Show a group of duplicate images."""
         color = "red" if group_type == "identical" else "orange"
 
+        # Collect all paths for comparison
+        all_paths = [group.original.path] + [dup.path for dup in group.duplicates]
+
         with ui.card().classes(f"w-full border-l-4 border-{color}-500"):
             # Header
             with ui.row().classes("w-full items-center gap-2 mb-2"):
@@ -339,6 +342,12 @@ class SelectFolderPage:
                 ui.badge(f"{group.size} images").props(f"color={color}")
                 if group.avg_distance > 0:
                     ui.label(f"(similarity: {100 - group.avg_distance * 10:.0f}%)").classes("text-gray-500 text-sm")
+
+                # Compare button - opens all images side by side
+                ui.button(
+                    "Compare All",
+                    on_click=lambda paths=all_paths: self._compare_images(paths),
+                ).props("flat dense icon=compare color=primary").classes("ml-auto")
 
             # Images side by side
             with ui.row().classes("flex-wrap gap-3"):
@@ -402,6 +411,107 @@ class SelectFolderPage:
             os.startfile(str(path))  # Opens in default Windows image viewer
         except Exception as e:
             ui.notify(f"Could not open image: {escape(str(e))}", type="warning")
+
+    def _compare_images(self, paths: list[Path]) -> None:
+        """Open selected images from a group for side-by-side comparison in browser."""
+        import tempfile
+        import webbrowser
+
+        # Filter to only selected (checked) images
+        selected_paths = [p for p in paths if self._keep_selections.get(str(p), True)]
+
+        if len(selected_paths) < 2:
+            ui.notify("Select at least 2 images to compare", type="warning")
+            return
+
+        try:
+            # Create HTML with images side by side
+            html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Image Comparison</title>
+    <style>
+        body {{
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+        }}
+        .image-container {{
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: #2a2a2a;
+            padding: 10px;
+            border-radius: 8px;
+        }}
+        img {{
+            max-height: 90vh;
+            max-width: {90 // len(selected_paths)}vw;
+            object-fit: contain;
+        }}
+        .filename {{
+            color: #fff;
+            margin-top: 10px;
+            font-family: sans-serif;
+            font-size: 14px;
+        }}
+        .filesize {{
+            color: #888;
+            font-family: sans-serif;
+            font-size: 12px;
+        }}
+    </style>
+</head>
+<body>
+"""
+            for path in selected_paths:
+                size_kb = path.stat().st_size / 1024 if path.exists() else 0
+                html_content += f"""
+    <div class="image-container">
+        <img src="file:///{path.as_posix()}" alt="{escape(path.name)}">
+        <div class="filename">{escape(path.name)}</div>
+        <div class="filesize">{size_kb:.0f} KB</div>
+    </div>
+"""
+            html_content += """
+</body>
+</html>"""
+
+            # Write to temp file and open in browser
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False, encoding="utf-8") as f:
+                f.write(html_content)
+                temp_path = f.name
+
+            # Force open in browser (try Chrome, then Edge, then default)
+            import os
+            import subprocess
+
+            chrome_paths = [
+                os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+            ]
+
+            opened = False
+            for chrome in chrome_paths:
+                if os.path.exists(chrome):
+                    subprocess.Popen([chrome, temp_path])  # noqa: S603
+                    opened = True
+                    break
+
+            if not opened:
+                # Fallback to Edge or default browser
+                subprocess.run(["cmd", "/c", "start", "", temp_path], check=False, shell=True)  # noqa: S602
+
+            ui.notify(f"Comparing {len(selected_paths)} images", type="info")
+
+        except Exception as e:
+            ui.notify(f"Could not create comparison: {escape(str(e))}", type="warning")
 
     async def _on_move_duplicates(self) -> None:
         """Handle move duplicates button click."""
