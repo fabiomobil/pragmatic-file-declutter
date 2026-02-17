@@ -8,12 +8,13 @@ from __future__ import annotations
 import asyncio
 from html import escape
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from nicegui import ui
 
 if TYPE_CHECKING:
     from pragmatic_file_declutter.core.dedup import DeduplicationResult, DuplicateGroup
+    from pragmatic_file_declutter.core.file_ops import UndoStack
     from pragmatic_file_declutter.core.scanner import ScanResult
 
 
@@ -27,6 +28,13 @@ class SelectFolderPage:
         self._dedup_result: DeduplicationResult | None = None
         self._scanning: bool = False
         self._deduplicating: bool = False
+        self._moving: bool = False
+
+        # Track which images to keep (checked = keep, unchecked = duplicate)
+        self._keep_selections: dict[str, bool] = {}
+
+        # Undo stack for file operations
+        self._undo_stack: UndoStack | None = None
 
         # UI elements
         self._path_label: ui.label | None = None
@@ -35,6 +43,7 @@ class SelectFolderPage:
         self._progress_spinner: ui.spinner | None = None
         self._progress_label: ui.label | None = None
         self._dedup_container: ui.column | None = None
+        self._move_button: ui.button | None = None
 
     def build(self) -> None:
         """Build the page UI."""
@@ -299,6 +308,23 @@ class SelectFolderPage:
                     for i, group in enumerate(result.similar_groups):
                         self._show_duplicate_group(group, i, "similar")
 
+                # Move duplicates button
+                ui.separator()
+                with ui.card().classes("w-full bg-blue-50 p-4"):
+                    with ui.column().classes("w-full gap-2"):
+                        ui.label("Review the selections above, then click to move unchecked duplicates").classes(
+                            "text-blue-700"
+                        )
+                        with ui.row().classes("w-full justify-center gap-4"):
+                            self._move_button = ui.button(
+                                "Move Duplicates to Folder",
+                                on_click=self._on_move_duplicates,
+                            ).props("color=primary size=lg icon=drive_file_move")
+                            ui.button(
+                                "Undo Last Move",
+                                on_click=self._on_undo_last,
+                            ).props("outline size=lg icon=undo")
+
         self._dedup_container.set_visibility(True)
 
     def _show_duplicate_group(self, group: DuplicateGroup, index: int, group_type: str) -> None:
@@ -324,11 +350,18 @@ class SelectFolderPage:
                     self._show_image_card(dup.path, is_original=False)
 
     def _show_image_card(self, path: Path, is_original: bool) -> None:
-        """Show a card for a single image."""
-        with ui.card().classes("w-48"):
-            # Thumbnail
+        """Show a card for a single image with checkbox and click-to-zoom."""
+        path_str = str(path)
+
+        # Initialize selection state (original = keep by default)
+        if path_str not in self._keep_selections:
+            self._keep_selections[path_str] = is_original
+
+        with ui.card().classes("w-48 relative"):
+            # Thumbnail - clickable to open full size
             try:
-                ui.image(str(path)).classes("w-full h-32 object-cover rounded")
+                img = ui.image(str(path)).classes("w-full h-32 object-cover rounded cursor-pointer")
+                img.on("click", lambda p=path: self._show_fullsize_image(p))
             except Exception:
                 with ui.row().classes("w-full h-32 bg-gray-200 items-center justify-center rounded"):
                     ui.icon("broken_image").classes("text-gray-400 text-3xl")
@@ -347,11 +380,142 @@ class SelectFolderPage:
                 except OSError:
                     pass
 
-                # Badge
+                # Checkbox to select keep/delete
+                def on_change(e: Any, p: str = path_str) -> None:
+                    self._keep_selections[p] = e.value
+
+                checkbox = ui.checkbox(
+                    "Keep",
+                    value=self._keep_selections[path_str],
+                    on_change=on_change,
+                )
                 if is_original:
-                    ui.badge("KEEP", color="green").props("outline")
+                    checkbox.classes("text-green-600")
                 else:
-                    ui.badge("DUPLICATE", color="red").props("outline")
+                    checkbox.classes("text-gray-600")
+
+    def _show_fullsize_image(self, path: Path) -> None:
+        """Open a dialog showing the image at full size."""
+        with ui.dialog() as dialog, ui.card().classes("max-w-[90vw] max-h-[90vh] p-2"):
+            # Header with filename and close button
+            with ui.row().classes("w-full items-center justify-between mb-2"):
+                ui.label(escape(path.name)).classes("font-semibold truncate max-w-md")
+                ui.button(icon="close", on_click=dialog.close).props("flat round dense")
+
+            # Full size image
+            ui.image(str(path)).classes("max-w-full max-h-[75vh] object-contain")
+
+            # File info
+            with ui.row().classes("w-full justify-between text-sm text-gray-500 mt-2"):
+                try:
+                    size_mb = path.stat().st_size / (1024 * 1024)
+                    ui.label(f"Size: {size_mb:.2f} MB")
+                except OSError:
+                    ui.label("Size: unknown")
+                ui.label(escape(str(path))).classes("truncate max-w-md")
+
+        dialog.open()
+
+    async def _on_move_duplicates(self) -> None:
+        """Handle move duplicates button click."""
+        if not self._selected_path or not self._dedup_result or self._moving:
+            return
+
+        self._moving = True
+        self._set_progress(True, "Moving duplicates...")
+
+        try:
+            from pragmatic_file_declutter.core.file_ops import (
+                UndoStack,
+                get_default_history_path,
+                safe_move,
+            )
+
+            # Initialize undo stack if needed
+            if self._undo_stack is None:
+                history_path = get_default_history_path(self._selected_path)
+                self._undo_stack = UndoStack(history_path)
+
+            # Create output folders
+            base_output = self._selected_path / "_pragmatic_declutter" / "duplicadas"
+            identical_folder = base_output / "identicas"
+            similar_folder = base_output / "similares"
+            identical_folder.mkdir(parents=True, exist_ok=True)
+            similar_folder.mkdir(parents=True, exist_ok=True)
+
+            moved_count = 0
+            errors: list[str] = []
+
+            # Move unchecked images from identical groups
+            for group in self._dedup_result.identical_groups:
+                for img in group.all_images:
+                    path_str = str(img.path)
+                    if not self._keep_selections.get(path_str, True):
+                        dst = identical_folder / img.path.name
+                        # Handle name collisions
+                        if dst.exists():
+                            stem = img.path.stem
+                            suffix = img.path.suffix
+                            counter = 1
+                            while dst.exists():
+                                dst = identical_folder / f"{stem}_{counter}{suffix}"
+                                counter += 1
+                        try:
+                            safe_move(img.path, dst, self._undo_stack, root=self._selected_path)
+                            moved_count += 1
+                        except Exception as e:
+                            errors.append(f"{img.path.name}: {e}")
+
+            # Move unchecked images from similar groups
+            for group in self._dedup_result.similar_groups:
+                for img in group.all_images:
+                    path_str = str(img.path)
+                    if not self._keep_selections.get(path_str, True):
+                        dst = similar_folder / img.path.name
+                        # Handle name collisions
+                        if dst.exists():
+                            stem = img.path.stem
+                            suffix = img.path.suffix
+                            counter = 1
+                            while dst.exists():
+                                dst = similar_folder / f"{stem}_{counter}{suffix}"
+                                counter += 1
+                        try:
+                            safe_move(img.path, dst, self._undo_stack, root=self._selected_path)
+                            moved_count += 1
+                        except Exception as e:
+                            errors.append(f"{img.path.name}: {e}")
+
+            if moved_count > 0:
+                ui.notify(f"Moved {moved_count} duplicates to _pragmatic_declutter/duplicadas/", type="positive")
+
+            if errors:
+                ui.notify(f"Failed to move {len(errors)} files", type="warning")
+
+        except Exception as e:
+            ui.notify(f"Move failed: {escape(str(e))}", type="negative")
+
+        finally:
+            self._moving = False
+            self._set_progress(False)
+
+    async def _on_undo_last(self) -> None:
+        """Handle undo last move button click."""
+        if not self._undo_stack or self._undo_stack.is_empty():
+            ui.notify("Nothing to undo", type="info")
+            return
+
+        try:
+            from pragmatic_file_declutter.core.file_ops import undo_last
+
+            record = undo_last(self._undo_stack)
+            if record:
+                ui.notify(f"Restored: {Path(record.src).name}", type="positive")
+            else:
+                ui.notify("Nothing to undo", type="info")
+
+        except Exception as e:
+            ui.notify(f"Undo failed: {escape(str(e))}", type="negative")
 
     def _result_card(self, label: str, value: str, icon: str, color: str) -> None:
         """Create a result summary card."""
