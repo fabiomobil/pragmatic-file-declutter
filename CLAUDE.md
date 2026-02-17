@@ -87,9 +87,23 @@ When adding new dependencies:
 2. Pin major version only (e.g., `nicegui>=2.0,<3.0`)
 3. Document WHY in the PR/commit message
 
+## SECURITY
+- **Security agent**: `.claude/agents/security.md` — MUST be consulted before any PR
+- **Threat model**: File system attacks, API prompt injection, supply chain, UI XSS, data privacy
+- **Key rules**:
+  - ALL paths validated with `Path.resolve()` + `is_relative_to(root)` before use
+  - ALL filenames sanitized before creating files/folders
+  - ALL API responses validated with Pydantic models
+  - ALL user-derived text HTML-escaped before NiceGUI rendering
+  - NEVER `eval()`, `exec()`, `os.system()`, `subprocess(shell=True)`
+  - NEVER hardcode API keys — use environment variables
+  - EXIF metadata is UNTRUSTED data — sanitize before use
+- **Security skill**: `.claude/skills/security.md` — Quick reference patterns
+
 ## REFERENCE FILES
 - `docs/KNOWLEDGE_BASE.md` — Complete research, decisions, trade-offs, pricing
-- `.claude/agents/` — Specialized subagents for different tasks
+- `.claude/agents/` — Specialized subagents (pm, architect, backend, frontend, tester, debugger, reviewer, **security**)
+- `.claude/skills/` — On-demand knowledge (photo-processing, file-safety, api-cost, **security**)
 - `.claude/commands/` — Custom slash commands
 
 ## HARDWARE CONTEXT
