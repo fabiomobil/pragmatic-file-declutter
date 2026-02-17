@@ -395,26 +395,13 @@ class SelectFolderPage:
                     checkbox.classes("text-gray-600")
 
     def _show_fullsize_image(self, path: Path) -> None:
-        """Open a dialog showing the image at full size."""
-        with ui.dialog() as dialog, ui.card().classes("max-w-[90vw] max-h-[90vh] p-2"):
-            # Header with filename and close button
-            with ui.row().classes("w-full items-center justify-between mb-2"):
-                ui.label(escape(path.name)).classes("font-semibold truncate max-w-md")
-                ui.button(icon="close", on_click=dialog.close).props("flat round dense")
+        """Open the image in the system's default image viewer."""
+        import os
 
-            # Full size image
-            ui.image(str(path)).classes("max-w-full max-h-[75vh] object-contain")
-
-            # File info
-            with ui.row().classes("w-full justify-between text-sm text-gray-500 mt-2"):
-                try:
-                    size_mb = path.stat().st_size / (1024 * 1024)
-                    ui.label(f"Size: {size_mb:.2f} MB")
-                except OSError:
-                    ui.label("Size: unknown")
-                ui.label(escape(str(path))).classes("truncate max-w-md")
-
-        dialog.open()
+        try:
+            os.startfile(str(path))  # Opens in default Windows image viewer
+        except Exception as e:
+            ui.notify(f"Could not open image: {escape(str(e))}", type="warning")
 
     async def _on_move_duplicates(self) -> None:
         """Handle move duplicates button click."""
